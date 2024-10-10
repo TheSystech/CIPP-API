@@ -3,7 +3,7 @@ function Invoke-ExecPartnerWebhook {
     .FUNCTIONALITY
         Entrypoint
     .ROLE
-        CIPP.Core.ReadWrite
+        CIPP.AppSettings.ReadWrite
     #>
     Param($Request, $TriggerMetadata)
 
@@ -34,7 +34,7 @@ function Invoke-ExecPartnerWebhook {
         'CreateSubscription' {
             $BaseURL = ([System.Uri]$Request.Headers.'x-ms-original-url').Host
             $Webhook = @{
-                TenantFilter  = $env:TenantId
+                TenantFilter  = $env:TenantID
                 PartnerCenter = $true
                 BaseURL       = $BaseURL
                 EventType     = $Request.Body.EventType
