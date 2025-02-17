@@ -5,13 +5,13 @@ Function Invoke-ExecPasswordConfig {
     .FUNCTIONALITY
         Entrypoint
     .ROLE
-        CIPP.Core.ReadWrite
+        CIPP.AppSettings.ReadWrite
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
 
-    $APIName = $TriggerMetadata.FunctionName
-    Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
+    $APIName = $Request.Params.CIPPEndpoint
+    Write-LogMessage -headers $Request.Headers -API $APINAME -message 'Accessed this API' -Sev 'Debug'
 
     $Table = Get-CIPPTable -TableName Settings
     $PasswordType = (Get-CIPPAzDataTableEntity @Table)
@@ -22,14 +22,14 @@ Function Invoke-ExecPasswordConfig {
         if ($Request.Query.List) {
             @{ passwordType = $PasswordType.passwordType }
         } else {
-            $SchedulerConfig = @{
+            $PasswordConfig = @{
                 'passwordType'  = "$($Request.Body.passwordType)"
                 'passwordCount' = '12'
                 'PartitionKey'  = 'settings'
                 'RowKey'        = 'settings'
             }
 
-            Add-CIPPAzDataTableEntity @Table -Entity $SchedulerConfig -Force | Out-Null
+            Add-CIPPAzDataTableEntity @Table -Entity $PasswordConfig -Force | Out-Null
             'Successfully set the configuration'
         }
     } catch {
