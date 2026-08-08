@@ -4,10 +4,18 @@ function Invoke-GetCippAlerts {
         Entrypoint,AnyTenant
     .ROLE
         CIPP.Core.Read
+    .DESCRIPTION
+        Returns the CIPP dashboard banner notifications: any hosted maintenance notice, today's most recent entries from the alert log, and warnings for an out-of-date or misconfigured deployment.
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
     $Alerts = [System.Collections.Generic.List[object]]::new()
+
+    # Hosted maintenance notice, set as a JSON blob in CIPP_MAINTENANCE_NOTICE. Added first so it
+    # sorts to the top of the banner stack. Self-suppresses once its end time has passed.
+    $MaintenanceNotice = Get-CIPPMaintenanceNotice
+    if ($MaintenanceNotice) { $Alerts.Add($MaintenanceNotice) }
+
     $Table = Get-CippTable -tablename CippAlerts
     $PartitionKey = Get-Date -UFormat '%Y%m%d'
     $Filter = "PartitionKey eq '{0}'" -f $PartitionKey
@@ -36,15 +44,6 @@ function Invoke-GetCippAlerts {
         Write-LogMessage -message 'Your CIPP API is out of date. Please update to the latest version' -API 'Updates' -tenant 'All Tenants' -sev Alert
     }
 
-    if ($env:ApplicationID -eq 'LongApplicationID' -or $null -eq $env:ApplicationID) {
-        $Alerts.Add(@{
-                title          = 'SAM Setup Incomplete'
-                Alert          = 'You have not yet completed your setup. Please go to the Setup Wizard in Application Settings to connect CIPP to your tenants.'
-                link           = '/cipp/setup'
-                type           = 'warning'
-                setupCompleted = $false
-            })
-    }
     if ($role -like '*superadmin*') {
         $Alerts.Add(@{
                 title = 'Superadmin Account Warning'
