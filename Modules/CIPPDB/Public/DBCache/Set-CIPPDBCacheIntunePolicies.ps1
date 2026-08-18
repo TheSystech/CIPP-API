@@ -52,6 +52,7 @@ function Set-CIPPDBCacheIntunePolicies {
         foreach ($LegacyType in @(
                 [PSCustomObject]@{ Type = 'WindowsAutopilotDeploymentProfiles'; CacheType = 'IntuneWindowsAutopilotDeploymentProfiles'; Uri = '/deviceManagement/windowsAutopilotDeploymentProfiles?$top=999&$expand=assignments' }
                 [PSCustomObject]@{ Type = 'DeviceEnrollmentConfigurations'; CacheType = 'IntuneDeviceEnrollmentConfigurations'; Uri = '/deviceManagement/deviceEnrollmentConfigurations?$top=999'; FetchAssignments = $true }
+                [PSCustomObject]@{ Type = 'AppleUserInitiatedEnrollmentProfiles'; CacheType = 'IntuneAppleUserInitiatedEnrollmentProfiles'; Uri = '/deviceManagement/appleUserInitiatedEnrollmentProfiles?$top=999'; FetchAssignments = $true }
                 [PSCustomObject]@{ Type = 'DeviceManagementScripts'; CacheType = 'IntuneDeviceManagementScripts'; Uri = '/deviceManagement/deviceManagementScripts?$top=999&$expand=assignments' }
                 [PSCustomObject]@{ Type = 'MobileApps'; CacheType = 'IntuneMobileApps'; Uri = '/deviceAppManagement/mobileApps?$top=999&$select=id,displayName,description,publisher,isAssigned,createdDateTime,lastModifiedDateTime'; FetchAssignments = $true }
             )) {
@@ -124,6 +125,18 @@ function Set-CIPPDBCacheIntunePolicies {
                     @($Result.body)
                 } else {
                     @()
+                }
+
+                if ($PolicyType.CacheType -eq 'IntuneDeviceConfigurations') {
+                    foreach ($Policy in $Policies) {
+                        if (@($Policy.omaSettings | Where-Object { $_.secretReferenceValueId }).Count -gt 0) {
+                            try {
+                                $null = Get-CIPPOmaSettingDecryptedValue -DeviceConfiguration $Policy -DeviceConfigurationId $Policy.id -TenantFilter $TenantFilter
+                            } catch {
+                                & $AddWarning "Failed to decrypt OMA settings for $($Policy.displayName): $($_.Exception.Message)"
+                            }
+                        }
+                    }
                 }
 
                 # Get assignments only for legacy collections whose list endpoints do

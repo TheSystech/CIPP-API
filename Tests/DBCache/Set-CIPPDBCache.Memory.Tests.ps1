@@ -27,6 +27,7 @@ BeforeAll {
     # and -AsApp spellings the collectors use.
     function New-GraphBulkRequest { param($Requests, $tenantid, $AsApp, $scope) }
     function New-ExoBulkRequest { param($tenantid, $cmdletArray, $useSystemMailbox, $Select, $ReturnWithCommand) }
+    function New-ExoRequest { param($cmdlet, $cmdParams, $Select, $Anchor, $useSystemMailbox, $tenantid, $NoAuthCheck, [switch]$Compliance, $ApiVersion, $ModuleVersion, [switch]$AsApp, [switch]$UseCertificate) }
     function Test-CIPPStandardLicense { param($StandardName, $TenantFilter, $Preset, [switch]$SkipLog) }
     function Get-Tenants { param($TenantFilter, [switch]$IncludeErrors) }
     function Update-CippQueueEntry { param($RowKey, $TotalTasks, [switch]$IncrementTotalTasks) }
@@ -47,19 +48,23 @@ BeforeAll {
             [int]$SkewMarginMinutes = 5
         )
         begin {
-            $script:DbWrites.Add([pscustomobject]@{
-                    Type     = $Type
-                    Tenant   = $TenantFilter
-                    AddCount = $AddCount.IsPresent
-                    Rows     = [System.Collections.Generic.List[object]]::new()
-                })
+            # EndRan is what proves the count row / orphan cleanup would have happened: collectors
+            # that open their writer up front still must not call End() on an empty result.
+            $Entry = [pscustomobject]@{
+                Type     = $Type
+                Tenant   = $TenantFilter
+                AddCount = $AddCount.IsPresent
+                Rows     = [System.Collections.Generic.List[object]]::new()
+                EndRan   = $false
+            }
+            $script:DbWrites.Add($Entry)
         }
         process {
             foreach ($Item in @($InputObject)) {
-                if ($null -ne $Item) { $script:DbWrites[-1].Rows.Add($Item) }
+                if ($null -ne $Item) { $Entry.Rows.Add($Item) }
             }
         }
-        end { }
+        end { $Entry.EndRan = $true }
     }
 
     function New-BulkReportResponse {
@@ -71,6 +76,10 @@ BeforeAll {
             [pscustomobject]@{ id = 'teamsActivity'; status = 200; body = [pscustomobject]@{ value = $TeamRows } }
         )
     }
+
+    # Real helper, not a stub: it is pure logic with no external calls, and the mailbox collector's
+    # AutoExpandingArchive/AutoExpandingArchiveScope columns are part of the row shape under test.
+    . (Join-Path $RepoRoot 'Modules/CIPPCore/Public/Get-CIPPAutoExpandingArchiveState.ps1')
 
     . (Get-CollectorPath 'Set-CIPPDBCacheGroups')
     . (Get-CollectorPath 'Set-CIPPDBCacheTeams')
@@ -382,6 +391,47 @@ Describe 'DBCache collectors reworked for bounded memory' {
             $Write.Rows.Count | Should -Be 5
             $Write.Rows[0].UPN | Should -Be 'u1@contoso.com'
         }
+
+        It 'projects per-mailbox Auto Expanding Archive state when the org setting is off' {
+            # The org lookup is a separate call from the mailbox bulk request; the default stub
+            # returns nothing, which is the "org setting unavailable" path.
+            $Mixed = @(
+                [pscustomobject]@{ id = 'id-1'; ExternalDirectoryObjectId = 'id-1'; UserPrincipalName = 'u1@contoso.com'; DisplayName = 'User 1'; PrimarySMTPAddress = 'u1@contoso.com'; ArchiveGuid = '00000000-0000-0000-0000-000000000000'; EmailAddresses = @(); GrantSendOnBehalfTo = @(); AutoExpandingArchiveEnabled = $true }
+                [pscustomobject]@{ id = 'id-2'; ExternalDirectoryObjectId = 'id-2'; UserPrincipalName = 'u2@contoso.com'; DisplayName = 'User 2'; PrimarySMTPAddress = 'u2@contoso.com'; ArchiveGuid = '00000000-0000-0000-0000-000000000000'; EmailAddresses = @(); GrantSendOnBehalfTo = @(); AutoExpandingArchiveEnabled = $false }
+            )
+            Mock -CommandName New-ExoBulkRequest -MockWith { @{ 'Get-Mailbox' = $Mixed; 'Get-User' = @() } }
+
+            Set-CIPPDBCacheMailboxes -TenantFilter 'contoso.com' -Types @('None')
+
+            $Rows = ($script:DbWrites | Where-Object Type -EQ 'Mailboxes').Rows
+            $Rows[0].AutoExpandingArchive | Should -BeTrue
+            $Rows[0].AutoExpandingArchiveScope | Should -Be 'Mailbox'
+            $Rows[1].AutoExpandingArchive | Should -BeFalse
+            $Rows[1].AutoExpandingArchiveScope | Should -Be 'None'
+        }
+
+        It 'lets the organization Auto Expanding Archive setting override every mailbox' {
+            Mock -CommandName New-ExoRequest -MockWith { [pscustomobject]@{ AutoExpandingArchiveEnabled = $true } }
+
+            Set-CIPPDBCacheMailboxes -TenantFilter 'contoso.com' -Types @('None')
+
+            $Rows = ($script:DbWrites | Where-Object Type -EQ 'Mailboxes').Rows
+            $Rows.Count | Should -Be 5
+            @($Rows.AutoExpandingArchive) | Should -Not -Contain $false
+            @($Rows.AutoExpandingArchiveScope) | Select-Object -Unique | Should -Be 'Organization'
+        }
+
+        It 'keeps caching mailboxes when the organization config lookup fails' {
+            # Regression guard: the org lookup has its own try/catch precisely so a failure here
+            # degrades to mailbox-level values instead of aborting the whole mailbox cache.
+            Mock -CommandName New-ExoRequest -MockWith { throw 'org config unavailable' }
+
+            Set-CIPPDBCacheMailboxes -TenantFilter 'contoso.com' -Types @('None')
+
+            $Rows = ($script:DbWrites | Where-Object Type -EQ 'Mailboxes').Rows
+            $Rows.Count | Should -Be 5
+            $Rows[0].AutoExpandingArchiveScope | Should -Be 'None'
+        }
     }
 
     Context 'Set-CIPPDBCacheUserRegistrationDetails' {
@@ -397,14 +447,18 @@ Describe 'DBCache collectors reworked for bounded memory' {
             $script:DbWrites[0].Rows.id | Should -Be @('u1', 'u2')
         }
 
-        It 'does not invoke the writer at all when the report is empty' {
-            # The pre-existing behaviour: an empty report leaves the previous cache and its count row
-            # untouched. Piping unconditionally would have run the writer's end block and zeroed it.
+        It 'does not run the writer end block when the report is empty' {
+            # An empty report leaves the previous cache and its count row untouched. The writer is
+            # opened before the Graph pipeline starts - its steppable pipeline has to capture this
+            # collector's scope rather than New-GraphGetRequest's - so the invocation itself is
+            # expected. What must not happen is End(), which writes the count row and clears orphans.
             Mock -CommandName New-GraphGetRequest -MockWith { @() }
 
             Set-CIPPDBCacheUserRegistrationDetails -TenantFilter 'contoso.com'
 
-            $script:DbWrites.Count | Should -Be 0
+            $script:DbWrites.Count | Should -Be 1
+            $script:DbWrites[0].Rows | Should -BeNullOrEmpty
+            $script:DbWrites[0].EndRan | Should -BeFalse
         }
     }
 
