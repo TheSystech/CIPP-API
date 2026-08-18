@@ -18,6 +18,8 @@ jobs:
       # Checkout the repository
       - name: Checkout Code
         uses: actions/checkout@v3
+        with:
+            allow-unsafe-pr-checkout: true
 
       # Read and Trim Version
       - name: Read and Trim Version
