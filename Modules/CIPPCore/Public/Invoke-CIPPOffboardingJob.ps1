@@ -22,11 +22,36 @@ function Invoke-CIPPOffboardingJob {
         $UserID = $User.id
         $DisplayName = $User.displayName
 
+        # Resolve OOO once; empty TipTap HTML must not enable automatic replies
+        $OooMessage = $null
+        if (-not (Test-CIPPHtmlIsEmpty -Html ([string]$Options.OOO))) {
+            $OooMessage = Get-CIPPTextReplacement -TenantFilter $TenantFilter -Text $Options.OOO
+        }
+
         # Build dynamic batch of offboarding tasks based on selected options
         $Batch = [System.Collections.Generic.List[object]]::new()
 
-        # Build list of tasks in execution order with their cmdlets
+        # When the user is being deleted, only user removal and OneDrive access grants remain valid; every other task is skipped regardless of its flag
+        $DeleteUserSelected = $Options.DeleteUser -eq $true
+        $AllowedCmdletsWhenDeletingUser = @('Remove-CIPPUser', 'Set-CIPPSharePointPerms')
+        $SkippedForDeleteUser = [System.Collections.Generic.List[string]]::new()
+
+        # Build list of tasks in execution order with their cmdlets.
+        # The account-only wipe must run before session revocation, sign-in disable and device removal:
+        # the wipe is delivered on the device's next Exchange connection, so the account must still be
+        # able to authenticate and the ActiveSync partnership must still exist when it is issued.
         $TaskOrder = @(
+            @{
+                Condition  = { $Options.WipeMobile -eq $true }
+                Cmdlet     = 'Clear-CIPPMobileDevice'
+                Parameters = @{
+                    userid       = $UserID
+                    username     = $Username
+                    tenantFilter = $TenantFilter
+                    APIName      = $APIName
+                    Headers      = $Headers
+                }
+            }
             @{
                 Condition  = { $Options.RevokeSessions -eq $true }
                 Cmdlet     = 'Revoke-CIPPSessions'
@@ -117,13 +142,13 @@ function Invoke-CIPPOffboardingJob {
                 }
             }
             @{
-                Condition  = { ![string]::IsNullOrEmpty($Options.OOO) }
+                Condition  = { -not [string]::IsNullOrEmpty($OooMessage) }
                 Cmdlet     = 'Set-CIPPOutOfOffice'
                 Parameters = @{
                     tenantFilter    = $TenantFilter
                     UserID          = $Username
-                    InternalMessage = $Options.OOO
-                    ExternalMessage = $Options.OOO
+                    InternalMessage = $OooMessage
+                    ExternalMessage = $OooMessage
                     APIName         = $APIName
                     state           = 'Enabled'
                     Headers         = $Headers
@@ -320,13 +345,26 @@ function Invoke-CIPPOffboardingJob {
 
         # Build batch from selected tasks
         foreach ($Task in $TaskOrder) {
-            if (& $Task.Condition) {
-                $Batch.Add(@{
-                        FunctionName = 'CIPPOffboardingTask'
-                        Cmdlet       = $Task.Cmdlet
-                        Parameters   = $Task.Parameters
-                    })
+            if (-not (& $Task.Condition)) {
+                continue
             }
+
+            if ($DeleteUserSelected -and $Task.Cmdlet -notin $AllowedCmdletsWhenDeletingUser) {
+                $SkippedForDeleteUser.Add($Task.Cmdlet)
+                continue
+            }
+
+            $Batch.Add(@{
+                    FunctionName = 'CIPPOffboardingTask'
+                    Cmdlet       = $Task.Cmdlet
+                    Parameters   = $Task.Parameters
+                })
+        }
+
+        if ($SkippedForDeleteUser.Count -gt 0) {
+            $SkippedMessage = "Delete user selected for $Username. Skipped tasks: $($SkippedForDeleteUser -join ', ')"
+            Write-Information $SkippedMessage
+            Write-LogMessage -API $APIName -tenant $TenantFilter -message $SkippedMessage -sev Info
         }
 
         if ($Batch.Count -eq 0) {
