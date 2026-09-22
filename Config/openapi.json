@@ -7553,6 +7553,9 @@
                   "country": {
                     "type": "string"
                   },
+                  "defaultAttributes": {
+                    "type": "string"
+                  },
                   "defaultForTenant": {
                     "type": "string"
                   },
@@ -11550,7 +11553,7 @@
         "tags": [
           "CIPP > Settings"
         ],
-        "description": "Runs the CIPP deployment's self-diagnostics and returns the result. Type selects the check: 'Permissions' verifies the SAM application's Graph permissions, 'Tenants' tests access to each tenant, and 'GDAP' inspects the GDAP relationships and role mappings. Results are cached for an hour unless SkipCache is true.",
+        "description": "Runs the CIPP deployment's self-diagnostics and returns the result. Type selects the check: 'Permissions' verifies the SAM application's Graph permissions, 'Tenants' tests access to each tenant, and 'GDAP' inspects the GDAP relationships and role mappings. Results are cached for an hour and served from cache by default. Pass SkipCache to trigger a fresh run of the check; the run repopulates the cache and the response only acknowledges it started, so call again without SkipCache to read the updated results. For the 'Tenants' check, supplying TenantId returns just that tenant's cached result; add SkipCache to trigger a re-check of that single tenant.",
         "requestBody": {
           "required": false,
           "content": {
@@ -11560,11 +11563,11 @@
                 "properties": {
                   "SkipCache": {
                     "type": "string",
-                    "description": "Re-run the check instead of serving the cached result."
+                    "description": "Trigger a fresh run of the check instead of serving the cached result. The run repopulates the cache and the response only acknowledges it, so a follow-up call without SkipCache is what returns the updated result."
                   },
                   "TenantId": {
                     "type": "string",
-                    "description": "The tenant to (re)check for the 'Tenants' type. Query or body, for the same reason as Type."
+                    "description": "The tenant to read for the 'Tenants' type: returns just that tenant's cached result. Pair it with SkipCache to trigger a re-check of that one tenant, then read again without SkipCache to get the refreshed result. Query or body, as with Type."
                   },
                   "Type": {
                     "type": "string",
@@ -11579,7 +11582,7 @@
           {
             "name": "SkipCache",
             "in": "query",
-            "description": "Re-run the check instead of serving the cached result.",
+            "description": "Trigger a fresh run of the check instead of serving the cached result. The run repopulates the cache and the response only acknowledges it, so a follow-up call without SkipCache is what returns the updated result.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11588,7 +11591,7 @@
           {
             "name": "TenantId",
             "in": "query",
-            "description": "The tenant to (re)check for the 'Tenants' type. Query or body, for the same reason as Type.",
+            "description": "The tenant to read for the 'Tenants' type: returns just that tenant's cached result. Pair it with SkipCache to trigger a re-check of that one tenant, then read again without SkipCache to get the refreshed result. Query or body, as with Type.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11660,6 +11663,77 @@
           }
         ],
         "x-cipp-role": "CIPP.AppSettings.Read",
+        "x-cipp-any-tenant": true
+      }
+    },
+    "/api/ExecAcknowledgeAlert": {
+      "post": {
+        "summary": "ExecAcknowledgeAlert",
+        "operationId": "ExecAcknowledgeAlert",
+        "tags": [
+          "CIPP > Core"
+        ],
+        "description": "Acknowledges or un-acknowledges one tracked alert item in the AlertLifecycle table.\nBody: TenantFilter, RowKey (from ListAlertResults), Action (Acknowledge or\nUnacknowledge, default Acknowledge) and an optional Note. An acknowledged item stays\non the dashboard, marked as known, until the alert stops reporting it. Only Open\nitems can be acknowledged; un-acknowledging returns the item to Open.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "Action": {
+                    "type": "string"
+                  },
+                  "Note": {
+                    "type": "string"
+                  },
+                  "RowKey": {
+                    "type": "string"
+                  },
+                  "Tenant": {
+                    "type": "string"
+                  },
+                  "TenantFilter": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required field or invalid input"
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing bearer token"
+          },
+          "403": {
+            "description": "Forbidden - caller lacks the required RBAC role"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-cipp-role": "CIPP.Alert.ReadWrite",
         "x-cipp-any-tenant": true
       }
     },
@@ -12831,6 +12905,9 @@
                     "type": "string",
                     "description": "When this client is MCP-enabled it becomes one of the OAuth client apps that AI connectors sign in as. Several MCPAllowed clients may coexist (each with its own role/IP/redirects/CA); the dedicated CIPP-MCP app is the shared protected resource. Configure this client (callbacks, public client flows, resource permissions + consent) and ensure the resource app exists (Set-CIPPMCPClientApp -> New-CIPPMcpResourceApp)."
                   },
+                  "PublicRedirectUris": {
+                    "type": "string"
+                  },
                   "RedirectUris": {
                     "type": "string"
                   },
@@ -12844,6 +12921,9 @@
                       }
                     ],
                     "description": "Authorize the role assignment BEFORE any side effects (app registration / secret creation). A caller may only assign a role whose effective permissions are a subset of their own, and may only modify an existing client whose current role is likewise within their grant. This blocks privilege escalation via the ApiClients table (e.g. editor -> superadmin)."
+                  },
+                  "WebRedirectUris": {
+                    "type": "string"
                   }
                 }
               }
@@ -38557,8 +38637,24 @@
         "tags": [
           "CIPP > Core"
         ],
-        "description": "Lists the currently-active fired alert items for a tenant, read from the\nAlertLastRun table. AlertLastRun stores the items produced by the most recent\nrun of each scripted alert (Get-CIPPAlert*) after snoozed items have already\nbeen filtered out, so this returns the active (non-snoozed) instances. Each\nitem is returned with a content preview/hash (matching the snooze format) and\nthe raw alert item so the frontend can snooze it via ExecSnoozeAlert.",
+        "description": "Lists the tracked alert items for a tenant from the AlertLifecycle table, which\nWrite-AlertTrace maintains: one row per alert item with its Status (Open,\nAcknowledged, Snoozed or Resolved), when it was first and last seen, when it was\nlast checked, how often it reopened and who acknowledged it. Pass tenantFilter\n(or AllTenants for every tenant the caller may see). Open, Acknowledged and\nSnoozed items are always returned; Resolved items are included when\nIncludeResolved=true, limited to those resolved within the last Days days\n(default 2, at most 366). Each item carries the raw alert item and the keys\nneeded to snooze, unsnooze or acknowledge it.",
         "parameters": [
+          {
+            "name": "Days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "IncludeResolved",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "tenantFilter",
             "in": "query",
@@ -38577,20 +38673,57 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "description": "Derived from the fields written into the storage table it reads. Fields taken from the storage writers may be omitted by this endpoint, and the response may carry computed fields not listed here.",
+                    "description": "Derived from the fields written into the storage table it reads, and the columns the CIPP UI renders. Fields taken from the storage writers may be omitted by this endpoint, and the response may carry computed fields not listed here.",
                     "properties": {
+                      "AcknowledgedAt": {
+                        "x-cipp-field-source": "storage"
+                      },
+                      "AcknowledgedBy": {
+                        "type": "string",
+                        "x-cipp-field-source": "storage,frontend"
+                      },
+                      "AcknowledgeNote": {
+                        "x-cipp-field-source": "storage,frontend"
+                      },
+                      "CmdletName": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "ContentPreview": {
+                        "x-cipp-field-source": "frontend"
+                      },
                       "ETag": {
                         "type": "string",
                         "x-cipp-field-source": "storage"
                       },
-                      "LastRunTime": {
+                      "FirstSeen": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "LastChecked": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "LastSeen": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "ReopenCount": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "ResolvedAt": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "SnoozedBy": {
+                        "x-cipp-field-source": "storage,frontend"
+                      },
+                      "SnoozeRowKey": {
                         "x-cipp-field-source": "storage"
                       },
-                      "PartitionKey": {
+                      "SnoozeUntil": {
                         "x-cipp-field-source": "storage"
                       },
-                      "RowKey": {
-                        "x-cipp-field-source": "storage"
+                      "Status": {
+                        "x-cipp-field-source": "storage,frontend"
+                      },
+                      "Tenant": {
+                        "x-cipp-field-source": "frontend"
                       },
                       "Timestamp": {
                         "type": "string",
@@ -40432,6 +40565,9 @@
                         "type": "string",
                         "x-cipp-field-source": "storage"
                       },
+                      "EventCreationTime": {
+                        "x-cipp-field-source": "storage"
+                      },
                       "LogId": {
                         "x-cipp-field-source": "backend"
                       },
@@ -40691,7 +40827,57 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "description": "Not described statically: this endpoint returns the upstream response as-is, so its fields are determined by the upstream API rather than by CIPP. Call the endpoint to see the actual shape, or add a response schema in backend/Config/openapi-overrides."
+                    "description": "Derived from the Microsoft Graph entity it queries, and the columns the CIPP UI renders. This endpoint returns the Graph response as-is without selecting fields, so these are the properties the entity CAN carry (x-cipp-field-source: graph-entity) rather than a proven projection - Graph returns a default subset unless asked otherwise.",
+                    "properties": {
+                      "createdDateTime": {
+                        "type": "string",
+                        "x-cipp-field-source": "graph-entity"
+                      },
+                      "description": {
+                        "type": "string",
+                        "x-cipp-field-source": "graph-entity,frontend"
+                      },
+                      "deviceEnrollmentConfigurationType": {
+                        "type": "object",
+                        "x-cipp-field-source": "graph-entity"
+                      },
+                      "deviceNameTemplate": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "displayName": {
+                        "type": "string",
+                        "x-cipp-field-source": "graph-entity,frontend"
+                      },
+                      "extractHardwareHash": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "id": {
+                        "type": "string",
+                        "x-cipp-field-source": "graph-entity"
+                      },
+                      "language": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "lastModifiedDateTime": {
+                        "type": "string",
+                        "x-cipp-field-source": "graph-entity"
+                      },
+                      "PolicyAssignment": {
+                        "x-cipp-field-source": "frontend"
+                      },
+                      "priority": {
+                        "type": "integer",
+                        "x-cipp-field-source": "graph-entity"
+                      },
+                      "roleScopeTagIds": {
+                        "type": "array",
+                        "x-cipp-field-source": "graph-entity"
+                      },
+                      "version": {
+                        "type": "integer",
+                        "x-cipp-field-source": "graph-entity"
+                      }
+                    }
                   }
                 }
               }
@@ -40851,9 +41037,14 @@
           {
             "name": "DataToReturn",
             "in": "query",
+            "description": "Optional. Which section to return: 'AzureADConnectSettings' for the sync status and configuration, or 'AzureADObjectsInError' for objects that failed to sync. Omit to return both.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "AzureADConnectSettings",
+                "AzureADObjectsInError"
+              ]
             }
           },
           {
@@ -40912,6 +41103,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request - missing required field or invalid input"
           },
           "401": {
             "description": "Unauthorized - invalid or missing bearer token"
@@ -48099,14 +48293,22 @@
           {
             "name": "period",
             "in": "query",
+            "description": "Reporting window for Graph reports: 'D7', 'D30' (default), 'D90' or 'D180'.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "D180",
+                "D30",
+                "D7",
+                "D90"
+              ]
             }
           },
           {
             "name": "report",
             "in": "query",
+            "description": "The report name to fetch (e.g. 'getEmailActivityUserDetail'). Omit to enumerate the reports available for the selected Type instead of fetching one.",
             "required": false,
             "schema": {
               "type": "string"
@@ -48118,9 +48320,14 @@
           {
             "name": "type",
             "in": "query",
+            "description": "Report source: 'graph' (default) for Microsoft Graph usage reports, or 'office' for the reports.office.com service.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "graph",
+                "office"
+              ]
             }
           }
         ],
@@ -48178,7 +48385,7 @@
         "tags": [
           "CIPP > Core"
         ],
-        "description": "Proxies an arbitrary Microsoft Graph API GET request for a tenant. Supports custom endpoints, filters, pagination, and field selection via query parameters.",
+        "description": "Proxies an arbitrary Microsoft Graph API GET request for a tenant. Supports custom endpoints, filters, pagination, and field selection via query parameters. If a request returns a permission error, retry with AsApp set to true: admin and application-scoped endpoints (for example admin/sharepoint/settings) require the application's own permissions rather than the default delegated access.",
         "parameters": [
           {
             "name": "$count",
@@ -48396,9 +48603,14 @@
           {
             "name": "Version",
             "in": "query",
+            "description": "Graph API version to call: v1.0 or beta. Defaults to beta when omitted.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "beta",
+                "v1.0"
+              ]
             }
           }
         ],
@@ -58149,9 +58361,14 @@
           {
             "name": "Type",
             "in": "query",
+            "description": "Optional site-type filter: 'SharePoint' or 'TeamsSite'. Omit to return both.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "SharePoint",
+                "TeamsSite"
+              ]
             }
           }
         ],
@@ -58779,9 +58996,14 @@
           {
             "name": "Type",
             "in": "query",
+            "description": "Required. Which usage set to list: SharePointSiteUsage or OneDriveUsageAccount.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "OneDriveUsageAccount",
+                "SharePointSiteUsage"
+              ]
             }
           },
           {
@@ -59052,7 +59274,6 @@
                         "x-cipp-field-source": "backend"
                       },
                       "PartitionKey": {
-                        "type": "string",
                         "x-cipp-field-source": "storage,backend"
                       },
                       "RemainingDays": {
